@@ -1,0 +1,295 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SIR Mapping App — Web</title>
+  <link rel="manifest" href="manifest.json">
+  <style>
+    :root{--gold:#D4AF37;--bg:#000;--panel:#0b0b0b;--muted:#888;--blue:#0D47A1}
+    body{margin:0;background:linear-gradient(180deg,#000,#0a0a0a);font-family:Inter,Segoe UI,Arial;color:#fff}
+    .container{max-width:1100px;margin:24px auto;padding:20px}
+    header{display:flex;align-items:center;gap:16px}
+    .logo{width:64px;height:64px;border-radius:50%;background:#111;display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--gold);font-size:20px;box-shadow:0 4px 14px rgba(0,0,0,.6)}
+    h1{margin:0;font-size:20px;color:var(--gold)}
+    .nav{margin-top:18px;display:flex;gap:12px}
+    button{background:#111;border:1px solid #222;color:var(--gold);padding:10px 14px;border-radius:8px;cursor:pointer}
+    .muted{color:var(--muted)}
+    .panel{background:linear-gradient(180deg,#060606,#0b0b0b);padding:12px;border-radius:10px;margin-top:12px;border:1px solid #222}
+    input[type=text]{background:#111;border:1px solid #222;padding:8px;border-radius:8px;color:#fff;width:320px}
+    table{border-collapse:collapse;width:100%;min-width:800px}
+    th,td{border:1px solid #222;padding:8px;text-align:left;background:transparent}
+    th{background:#080808;color:var(--gold);position:relative;cursor:grab}
+    th .handle{position:absolute;right:6px;top:6px;cursor:grab;padding:4px;border-radius:4px;background:#111;color:var(--gold);font-weight:700}
+    tr.highlight{background:rgba(13,71,161,0.12)}
+    .controls{display:flex;gap:8px;align-items:center;margin-top:8px}
+    .bottom{display:flex;justify-content:space-between;margin-top:12px;align-items:center}
+    .toast{position:fixed;right:20px;bottom:20px;background:#111;padding:10px 14px;border-radius:8px;border:1px solid #222;color:var(--gold)}
+    .modal{position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:20px}
+    .modal .card{background:#050505;padding:16px;border-radius:10px;max-width:700px;width:100%;border:1px solid #222}
+    .flex{display:flex;gap:8px;align-items:center}
+    .small{font-size:13px;color:var(--muted)}
+    .filebtn{display:inline-block;padding:8px 10px;border-radius:8px;background:#111;border:1px solid #222;color:var(--gold);cursor:pointer}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo">SIR</div>
+      <div>
+        <h1>SIR MAPPING APP BY SUKAMAL — Web</h1>
+        <div class="small">Search + Editor — Upload an Excel file to get started</div>
+      </div>
+    </header>
+
+    <div class="nav">
+      <button id="btn-search">🔍 Search</button>
+      <button id="btn-editor">✏️ Editor</button>
+      <label class="filebtn" id="uploadLabel">📁 Upload Excel
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display:none" />
+      </label>
+      <button id="downloadBtn">⬇️ Download Excel</button>
+      <button id="clearBtn" title="Clear stored workbook">🗑️ Clear</button>
+    </div>
+
+    <div id="main" class="panel">
+      <!-- Search view -->
+      <div id="searchView">
+        <div class="flex">
+          <input type="text" id="searchInput" placeholder="Serial Number, First Name, or Last Name" />
+          <button id="runSearch">Search</button>
+        </div>
+        <div id="results" class="panel" style="margin-top:12px"></div>
+      </div>
+
+      <!-- Editor view -->
+      <div id="editorView" style="display:none">
+        <div class="controls">
+          <div class="small">Columns can be reordered by dragging the ≡ handle in headers.</div>
+        </div>
+        <div style="overflow:auto;margin-top:12px">
+          <table id="dataTable"><thead id="tableHead"></thead><tbody id="tableBody"></tbody></table>
+        </div>
+      </div>
+
+      <div class="bottom">
+        <div class="small">Stored locally in browser (localStorage). Upload to replace.</div>
+        <div>
+          <button id="copyBtn">Copy Selected Record to Editor</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="modalRoot"></div>
+  <div id="toast" class="toast" style="display:none"></div>
+
+  <!-- SheetJS CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <script>
+    // App state
+    let workbook = { headers: [], rows: [] };
+    const STORAGE_KEY = 'sir_mapping_web_workbook_v6';
+
+    // Elements
+    const fileInput = document.getElementById('fileInput');
+    const uploadLabel = document.getElementById('uploadLabel');
+    const btnSearch = document.getElementById('btn-search');
+    const btnEditor = document.getElementById('btn-editor');
+    const searchView = document.getElementById('searchView');
+    const editorView = document.getElementById('editorView');
+    const searchInput = document.getElementById('searchInput');
+    const runSearch = document.getElementById('runSearch');
+    const results = document.getElementById('results');
+    const tableHead = document.getElementById('tableHead');
+    const tableBody = document.getElementById('tableBody');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const copyBtn = document.getElementById('copyBtn');
+    const modalRoot = document.getElementById('modalRoot');
+    const toast = document.getElementById('toast');
+
+    // Helpers
+    function showToast(txt, time=2500){ toast.textContent = txt; toast.style.display='block'; setTimeout(()=>toast.style.display='none', time); }
+
+    function saveToLocal(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(workbook)); }
+    function loadFromLocal(){ const v = localStorage.getItem(STORAGE_KEY); if(v){ workbook = JSON.parse(v); } }
+
+    function parseFile(arrayBuffer){
+      const wb = XLSX.read(arrayBuffer, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      workbook.headers = json.length>0 ? Object.keys(json[0]) : [];
+      workbook.rows = json;
+      saveToLocal();
+      renderAll();
+      showToast('Loaded ' + workbook.rows.length + ' rows');
+    }
+
+    // File input handling
+    uploadLabel.addEventListener('click', ()=> fileInput.click());
+    fileInput.addEventListener('change', async (e)=>{
+      const f = e.target.files[0];
+      if(!f) return;
+      const ab = await f.arrayBuffer();
+      parseFile(ab);
+      fileInput.value = null;
+    });
+
+    // UI switching
+    btnSearch.addEventListener('click', ()=>{ searchView.style.display='block'; editorView.style.display='none'; });
+    btnEditor.addEventListener('click', ()=>{ searchView.style.display='none'; editorView.style.display='block'; renderTable(); });
+
+    // Search logic
+    runSearch.addEventListener('click', ()=>{
+      const q = (searchInput.value||'').trim().toLowerCase();
+      if(!q){ results.innerHTML = '<div class="small muted">Enter a query</div>'; return; }
+      const res = workbook.rows.map((r,i)=>({...r,__idx:i})).filter(r=>{
+        const sn = (r['Serial Number']||r['Serial']||r['SNo']||'').toString().toLowerCase();
+        const fn = (r['First Name']||r['FirstName']||'').toString().toLowerCase();
+        const ln = (r['Last Name']||r['LastName']||'').toString().toLowerCase();
+        return sn.includes(q) || fn.includes(q) || ln.includes(q);
+      });
+      if(res.length===0){ results.innerHTML = '<div class="small">No records found</div>'; return; }
+      results.innerHTML = '<div class="small">Results ('+res.length+')</div><div style="margin-top:8px">' + res.map(r=>`<div style="padding:8px;border-bottom:1px solid #222;cursor:pointer" data-idx="${r.__idx}">${(r['First Name']||r['FirstName']||'')} ${(r['Last Name']||r['LastName']||'')} — Serial: ${r['Serial Number']||r['Serial']||''}<div class="small">Index: ${r.__idx}</div></div>`).join('') + '</div>';
+      // attach click listeners
+      results.querySelectorAll('[data-idx]').forEach(el=> el.addEventListener('click', ()=> openRecordModal(parseInt(el.dataset.idx)) ));
+    });
+
+    // Modal
+    let lastSelectedIdx = null;
+    function openRecordModal(idx){
+      lastSelectedIdx = idx;
+      const rec = workbook.rows[idx];
+      const html = `<div class="modal"><div class="card"><h3 style="color:var(--gold)">Record Details</h3><div style="max-height:400px;overflow:auto">${Object.keys(rec).map(k=>`<div style="margin-bottom:8px"><div style="color:var(--gold)">${k}</div><div>${rec[k]}</div></div>`).join('')}</div><div style="margin-top:12px;display:flex;gap:8px"><button id="modalCopy">Copy & Edit in Editor</button><button id="modalClose">Close</button></div></div></div>`;
+      modalRoot.innerHTML = html;
+      document.getElementById('modalClose').addEventListener('click', ()=> modalRoot.innerHTML='');
+      document.getElementById('modalCopy').addEventListener('click', ()=>{
+        // copy record into workbook rows and open editor
+        workbook.rows.push(JSON.parse(JSON.stringify(rec)));
+        saveToLocal();
+        modalRoot.innerHTML='';
+        btnEditor.click();
+        showToast('Record copied to editor');
+      });
+    }
+
+    // Render table (editor)
+    function renderTable(){
+      // headers
+      tableHead.innerHTML = '';
+      tableBody.innerHTML = '';
+      const trh = document.createElement('tr');
+      workbook.headers.forEach((h, idx)=>{
+        const th = document.createElement('th');
+        th.setAttribute('draggable', 'true');
+        th.dataset.colIndex = idx;
+        th.innerHTML = `<div style="min-width:200px">${h}</div><div class="handle">≡</div>`;
+        // drag handlers
+        th.addEventListener('dragstart', (e)=>{
+          e.dataTransfer.setData('text/plain', idx);
+          e.currentTarget.style.opacity = '0.4';
+        });
+        th.addEventListener('dragend', (e)=> e.currentTarget.style.opacity = '1');
+        th.addEventListener('dragover', (e)=> e.preventDefault());
+        th.addEventListener('drop', (e)=>{
+          e.preventDefault();
+          const from = parseInt(e.dataTransfer.getData('text/plain'));
+          const to = parseInt(e.currentTarget.dataset.colIndex);
+          reorderColumns(from, to);
+        });
+        trh.appendChild(th);
+      });
+      // actions header
+      const thActions = document.createElement('th'); thActions.textContent = 'Actions'; trh.appendChild(thActions);
+      tableHead.appendChild(trh);
+
+      // rows
+      workbook.rows.forEach((row, rIdx)=>{
+        const tr = document.createElement('tr');
+        if(row.__highlight) tr.classList.add('highlight');
+        workbook.headers.forEach(h=>{
+          const td = document.createElement('td');
+          td.contentEditable = true;
+          td.dataset.row = rIdx;
+          td.dataset.col = h;
+          td.innerText = row[h] || '';
+          td.addEventListener('input', (e)=>{
+            const r = parseInt(e.target.dataset.row), c = e.target.dataset.col;
+            workbook.rows[r][c] = e.target.innerText;
+            saveToLocal();
+          });
+          tr.appendChild(td);
+        });
+        const act = document.createElement('td');
+        act.innerHTML = `<button data-dup="${rIdx}">Duplicate</button><button data-del="${rIdx}">Delete</button><button data-hl="${rIdx}">Highlight</button>`;
+        tr.appendChild(act);
+        tableBody.appendChild(tr);
+      });
+      // action listeners
+      tableBody.querySelectorAll('button[data-dup]').forEach(b=> b.addEventListener('click', ()=>{
+        const idx = parseInt(b.dataset.dup);
+        workbook.rows.splice(idx+1,0, JSON.parse(JSON.stringify(workbook.rows[idx])));
+        saveToLocal(); renderTable();
+      }));
+      tableBody.querySelectorAll('button[data-del]').forEach(b=> b.addEventListener('click', ()=>{
+        const idx = parseInt(b.dataset.del);
+        workbook.rows.splice(idx,1); saveToLocal(); renderTable();
+      }));
+      tableBody.querySelectorAll('button[data-hl]').forEach(b=> b.addEventListener('click', ()=>{
+        const idx = parseInt(b.dataset.hl);
+        workbook.rows[idx].__highlight = !workbook.rows[idx].__highlight; saveToLocal(); renderTable();
+      }));
+    }
+
+    function reorderColumns(from, to){
+      if(from===to) return;
+      const headers = workbook.headers.slice();
+      const h = headers.splice(from,1)[0];
+      headers.splice(to,0,h);
+      // reorder rows
+      const rows = workbook.rows.map(r=>{
+        const obj = {};
+        headers.forEach(hdr => obj[hdr] = r[hdr] || '');
+        if(r.__highlight) obj.__highlight = r.__highlight;
+        return obj;
+      });
+      workbook.headers = headers; workbook.rows = rows; saveToLocal(); renderTable();
+    }
+
+    // Download Excel
+    downloadBtn.addEventListener('click', ()=>{
+      try{
+        const ws = XLSX.utils.json_to_sheet(workbook.rows || []);
+        const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+        const wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'});
+        const blob = new Blob([wbout], {type:'application/octet-stream'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = 'sir_mapping_web.xlsx'; a.click(); URL.revokeObjectURL(url);
+      }catch(e){ console.error(e); showToast('Failed to export'); }
+    });
+
+    clearBtn.addEventListener('click', ()=>{ if(confirm('Clear stored workbook?')){ workbook = {headers:[],rows:[]}; saveToLocal(); renderAll(); showToast('Cleared'); } });
+
+    // Copy selected record -> uses lastSelectedIdx from modal when search select used; as fallback copy first row.
+    copyBtn.addEventListener('click', ()=>{
+      const idx = (lastSelectedIdx !== null) ? lastSelectedIdx : 0;
+      if(workbook.rows.length===0){ showToast('No rows'); return; }
+      const rec = workbook.rows[idx];
+      workbook.rows.push(JSON.parse(JSON.stringify(rec))); saveToLocal(); showToast('Copied to editor'); renderTable(); btnEditor.click();
+    });
+
+    function renderAll(){ renderTable(); }
+
+    // initialize
+    loadFromLocal();
+    if(workbook.headers.length===0){ /* show hint */ results.innerHTML = '<div class="small">Upload an Excel file using the Upload Excel button.</div>'; }
+    renderAll();
+
+    // allow pressing Enter to search
+    searchInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ runSearch.click(); } });
+  </script>
+</body>
+</html>
